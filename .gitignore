@@ -4,6 +4,7 @@ Thumbs.db
 
 # Root markdown files (project-specific docs)
 /*.md
+!README.md
 
 # Python
 __pycache__/
