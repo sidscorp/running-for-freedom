@@ -12,11 +12,11 @@ const gameOptions = {
     // Color collection system
     colorTypes: ['red', 'blue', 'green', 'yellow'],
     maxColorSegments: 13,
-    maxPercentageDifference: 30,  // Percentage difference threshold for imbalance
+    maxPercentageDifference: 10,  // Percentage difference threshold for imbalance (strict!)
     baseSpeed: 300,
     characterBaseSpeed: 300,
     speedBonusPerUnit: 0,
-    imbalancePenaltyMultiplier: 3,  // Balanced - gives ~3-4x more recovery time
+    imbalancePenaltyMultiplier: 1,  // Forgiving - allows more flexibility in color balance
     colorSpawnInterval: [400, 900],
     unitsPerPickup: 10,
     maxSpeed: 800,  // Speed cap to prevent game from becoming unplayable
@@ -123,7 +123,6 @@ let worldSpeed;
 let timeSpeedBonus = 0;
 let isImbalanced = false;
 let imbalanceGraphics;
-let speedText;
 let distanceScore = 0;
 let distanceText;
 let jumpCount = 0;
@@ -150,6 +149,10 @@ let startContainer;
 let gameOverContainer;
 let isFirstStart = true;
 
+// Music and sound effects
+let bgMusic;
+let pickupSound;
+
 function preload() {
     createPixelCharacter.call(this);
     createBackgroundLayers.call(this);
@@ -157,6 +160,10 @@ function preload() {
     createColorCollectibles.call(this);
     createGround.call(this);
     createDeathParticles.call(this);
+
+    // Load music and sound effects
+    this.load.audio('bgMusic', 'music/main-theme-eg.wav');
+    this.load.audio('pickupSound', 'music/blink.wav');
 }
 
 // ============ PIXEL ART CREATION FUNCTIONS ============
@@ -478,7 +485,7 @@ function createDebugPanel() {
     // Background
     const bg = this.add.graphics();
     bg.fillStyle(0x000000, 0.75);
-    bg.fillRect(0, 0, 200, 180);
+    bg.fillRect(0, 0, 200, 200);
     debugContainer.add(bg);
 
     // Title
@@ -536,6 +543,10 @@ function createDebugPanel() {
 
     debugTexts.bonus = this.add.text(10, yPos, 'BONUS: 0', textStyle);
     debugContainer.add(debugTexts.bonus);
+    yPos += lineHeight;
+
+    debugTexts.differential = this.add.text(10, yPos, 'DIFF: 0 (0%)', textStyle);
+    debugContainer.add(debugTexts.differential);
 
     // Initially hidden
     debugContainer.setVisible(false);
@@ -556,6 +567,11 @@ function updateDebugPanel() {
     debugTexts.penalty.setText('PENALTY: ' + Math.round(currentPenalty));
     debugTexts.bonus.setText('BONUS: ' + timeSpeedBonus);
 
+    // Calculate and display differential
+    const diff = worldSpeed - characterSpeed;
+    const diffPercent = characterSpeed > 0 ? Math.round((diff / characterSpeed) * 100) : 0;
+    debugTexts.differential.setText('DIFF: ' + Math.round(diff) + ' (' + diffPercent + '%)');
+
     // Color coding
     if (currentPenalty > 0) {
         debugTexts.penalty.setFill('#ff6666');
@@ -573,6 +589,15 @@ function updateDebugPanel() {
         debugTexts.position.setFill('#ffff66');
     } else {
         debugTexts.position.setFill('#ffffff');
+    }
+
+    // Color code differential (negative = falling behind)
+    if (diff > 0) {
+        debugTexts.differential.setFill('#ff6666');  // Red = falling behind
+    } else if (diff < 0) {
+        debugTexts.differential.setFill('#66ff66');  // Green = ahead
+    } else {
+        debugTexts.differential.setFill('#ffffff');  // White = balanced
     }
 }
 
@@ -624,9 +649,9 @@ function createHelpBox() {
         'SPACE: Jump (x2)',
         'DOWN: Duck',
         'P: Pause',
+        'M: Toggle Music',
         'O: Toggle Obstacles',
-        'D: Debug Panel',
-        'Collect colors!'
+        'D: Debug Panel'
     ];
 
     controls.forEach(control => {
@@ -676,8 +701,8 @@ function createStartScreen() {
         '',
         'SPACE: Jump (Double Jump)',
         'DOWN: Duck',
-        'P: Pause  |  O: Toggle Obstacles',
-        'D: Debug Panel'
+        'M: Music  |  O: Obstacles',
+        'P: Pause  |  D: Debug Panel'
     ];
 
     let yPos = -60;
@@ -860,9 +885,13 @@ function startGame() {
     isFirstStart = false;
 
     // Show gameplay UI
-    speedText.setVisible(true);
     distanceText.setVisible(true);
     playerSegmentContainer.setVisible(true);
+
+    // Start background music
+    if (bgMusic && !bgMusic.isPlaying) {
+        bgMusic.play();
+    }
 
     // Start spawning obstacles and collectibles
     scheduleNextObstacle.call(this);
@@ -884,8 +913,25 @@ function create() {
     isImbalanced = false;
     distanceScore = 0;
     jumpCount = 0;
-    areObstaclesEnabled = true;
+    areObstaclesEnabled = false;  // Disabled by default (press O to enable)
     gameState = GAME_STATES.START;
+
+    // Create background music if not already created
+    if (!bgMusic) {
+        bgMusic = this.sound.add('bgMusic', {
+            loop: true,
+            volume: 0.5,
+            rate: 1.25  // 1.25x base speed (increases automatically based on speed gap)
+        });
+    }
+
+    // Create pickup sound if not already created
+    if (!pickupSound) {
+        pickupSound = this.sound.add('pickupSound', {
+            volume: 0.3,
+            rate: 2.0  // 2x speed for quick, snappy pickup sound
+        });
+    }
 
     // Create parallax background
     bgLayers = [];
@@ -938,6 +984,7 @@ function create() {
     this.input.keyboard.on('keydown-P', togglePause, this);
     this.input.keyboard.on('keydown-O', toggleObstacles, this);
     this.input.keyboard.on('keydown-D', toggleDebugPanel, this);
+    this.input.keyboard.on('keydown-M', toggleMusic, this);
 
     // DON'T start spawning immediately - wait for startGame() to be called
 
@@ -948,16 +995,7 @@ function create() {
     imbalanceGraphics = this.add.graphics();
     imbalanceGraphics.setDepth(50);
 
-    // Speed indicator (hidden initially - shown when game starts)
-    speedText = this.add.text(400, 16, 'SPEED: 100%', {
-        fontSize: '16px',
-        fill: '#ffffff',
-        fontFamily: 'monospace',
-        fontStyle: 'bold'
-    });
-    speedText.setOrigin(0.5, 0);
-    speedText.setDepth(100);
-    speedText.setVisible(false);
+    // Speed indicator removed - use debug panel (D key) for speed info
 
     // Distance/Score display (hidden initially - shown when game starts)
     distanceText = this.add.text(780, 16, 'DISTANCE: 0', {
@@ -1094,7 +1132,10 @@ function calculateCharacterSpeed() {
     // Character speed increases with time and collection bonus, reduced by imbalance penalty
     let speed = gameOptions.characterBaseSpeed + speedBonus + timeSpeedBonus - penalty;
 
-    // Character speed can go negative if heavily imbalanced, but clamp to 0 minimum
+    // Cap at max speed (same as world speed cap)
+    speed = Math.min(gameOptions.maxSpeed, speed);
+
+    // Clamp to 0 minimum
     characterSpeed = Math.max(0, speed);
 
     // Store penalty globally for debug display
@@ -1128,19 +1169,29 @@ function calculateImbalancePenalty() {
     const counts = { red: 0, blue: 0, green: 0, yellow: 0 };
     colorQueue.forEach(color => counts[color]++);
 
-    // Calculate percentages (0-100)
-    const total = colorQueue.length;
-    const percentages = {
-        red: (counts.red / total) * 100,
-        blue: (counts.blue / total) * 100,
-        green: (counts.green / total) * 100,
-        yellow: (counts.yellow / total) * 100
-    };
+    // Count how many unique colors we have
+    const uniqueColors = Object.values(counts).filter(count => count > 0).length;
 
-    // Find max and min percentages
-    const values = Object.values(percentages);
-    const maxPercent = Math.max(...values);
-    const minPercent = Math.min(...values);
+    // No penalty if we have less than 2 different colors
+    // (can't be "imbalanced" with only one color type)
+    if (uniqueColors < 2) {
+        isImbalanced = false;
+        return 0;
+    }
+
+    // Calculate percentages only for colors that exist (ignore 0% colors)
+    const total = colorQueue.length;
+    const collectedPercentages = [];
+
+    for (const color in counts) {
+        if (counts[color] > 0) {
+            collectedPercentages.push((counts[color] / total) * 100);
+        }
+    }
+
+    // Find max and min percentages among collected colors only
+    const maxPercent = Math.max(...collectedPercentages);
+    const minPercent = Math.min(...collectedPercentages);
     const difference = maxPercent - minPercent;
 
     // Calculate penalty if imbalanced
@@ -1165,18 +1216,7 @@ function updateImbalanceIndicator() {
     }
 }
 
-function updateSpeedIndicator() {
-    const speedPercent = Math.round((characterSpeed / gameOptions.characterBaseSpeed) * 100);
-    speedText.setText('SPEED: ' + speedPercent + '%');
-
-    if (isImbalanced) {
-        speedText.setFill('#ff6666');
-    } else if (speedPercent > 100) {
-        speedText.setFill('#66ff66');
-    } else {
-        speedText.setFill('#ffffff');
-    }
-}
+// Speed indicator removed - speed info now in debug panel (press D)
 
 // ============ SPAWNING ============
 
@@ -1282,23 +1322,19 @@ function spawnColorCollectible() {
 }
 
 function selectColorToSpawn() {
-    // 20% random, 80% weighted toward most collected
-    if (Math.random() < 0.2) {
-        return gameOptions.colorTypes[Math.floor(Math.random() * 4)];
-    }
-
+    // 100% weighted toward most collected (no random - very hard to balance!)
     // Calculate counts from queue for weighted selection
     const counts = { red: 0, blue: 0, green: 0, yellow: 0 };
     colorQueue.forEach(color => counts[color]++);
 
-    // Calculate total weight based on actual counts (more collected = higher weight)
+    // Calculate total weight based on actual counts (more collected = much higher weight)
     const totalWeight = Object.values(counts).reduce((sum, count) => {
-        return sum + (count + 10);
+        return sum + (count + 1);  // Minimal base weight for extreme feedback
     }, 0);
 
     let random = Math.random() * totalWeight;
     for (const color of gameOptions.colorTypes) {
-        const weight = counts[color] + 10;  // More collected = higher weight
+        const weight = counts[color] + 1;  // Extreme feedback loop - over-collected colors dominate spawns
         random -= weight;
         if (random <= 0) return color;
     }
@@ -1311,6 +1347,11 @@ function collectColorItem(playerSprite, collectible) {
     // Prevent double-collection: check if already being collected
     if (!collectible.active || collectible.collected) return;
     collectible.collected = true;  // Mark as collected immediately
+
+    // Play pickup sound at 2x speed
+    if (pickupSound) {
+        pickupSound.play();
+    }
 
     const colorType = collectible.colorType;
 
@@ -1367,6 +1408,11 @@ function togglePause() {
         // Pause timers
         if (obstacleTimer) obstacleTimer.paused = true;
         if (colorSpawnTimer) colorSpawnTimer.paused = true;
+
+        // Pause music
+        if (bgMusic && bgMusic.isPlaying) {
+            bgMusic.pause();
+        }
     } else if (gameState === GAME_STATES.PAUSED) {
         gameState = GAME_STATES.PLAYING;
         // Resume the game
@@ -1376,16 +1422,51 @@ function togglePause() {
         // Resume timers
         if (obstacleTimer) obstacleTimer.paused = false;
         if (colorSpawnTimer) colorSpawnTimer.paused = false;
+
+        // Resume music
+        if (bgMusic && bgMusic.isPaused) {
+            bgMusic.resume();
+        }
     }
 }
 
 function toggleObstacles() {
     areObstaclesEnabled = !areObstaclesEnabled;
-    
+
     const status = areObstaclesEnabled ? "ON" : "OFF";
     const color = areObstaclesEnabled ? "#66ff66" : "#ff6666";
-    
+
     const feedback = this.add.text(400, 200, `OBSTACLES: ${status}`, {
+        fontSize: '32px',
+        fill: color,
+        fontFamily: 'monospace',
+        fontStyle: 'bold',
+        stroke: '#000000',
+        strokeThickness: 4
+    }).setOrigin(0.5).setDepth(300);
+
+    this.tweens.add({
+        targets: feedback,
+        alpha: 0,
+        y: 150,
+        duration: 1000,
+        onComplete: () => feedback.destroy()
+    });
+}
+
+function toggleMusic() {
+    if (!bgMusic) return;
+
+    if (bgMusic.isPlaying) {
+        bgMusic.pause();
+    } else if (bgMusic.isPaused) {
+        bgMusic.resume();
+    }
+
+    const status = bgMusic.isPlaying ? "ON" : "OFF";
+    const color = bgMusic.isPlaying ? "#66ff66" : "#ff6666";
+
+    const feedback = this.add.text(400, 200, `MUSIC: ${status}`, {
         fontSize: '32px',
         fill: color,
         fontFamily: 'monospace',
@@ -1499,6 +1580,7 @@ function restartGame() {
     this.input.keyboard.off('keydown-P', togglePause, this);
     this.input.keyboard.off('keydown-O', toggleObstacles, this);
     this.input.keyboard.off('keydown-D', toggleDebugPanel, this);
+    this.input.keyboard.off('keydown-M', toggleMusic, this);
 
     // Remove restart listeners
     this.input.off('pointerdown', restartGame, this);
@@ -1524,6 +1606,41 @@ function update(time, delta) {
     calculateCharacterSpeed();
     calculateWorldSpeed();
 
+    // Auto-enable obstacles when character speed reaches cap
+    if (characterSpeed >= gameOptions.maxSpeed && !areObstaclesEnabled) {
+        areObstaclesEnabled = true;
+        scheduleNextObstacle.call(this);
+
+        // Show feedback
+        const feedback = this.add.text(400, 200, 'MAX SPEED REACHED!\nOBSTACLES ENABLED', {
+            fontSize: '28px',
+            fill: '#ff6666',
+            fontFamily: 'monospace',
+            fontStyle: 'bold',
+            stroke: '#000000',
+            strokeThickness: 4,
+            align: 'center'
+        }).setOrigin(0.5).setDepth(300);
+
+        this.tweens.add({
+            targets: feedback,
+            alpha: 0,
+            y: 150,
+            duration: 2000,
+            onComplete: () => feedback.destroy()
+        });
+    }
+
+    // Update music speed based on speed gap (automatic tension system)
+    if (bgMusic && bgMusic.isPlaying) {
+        const speedGap = worldSpeed - characterSpeed;
+        const baseRate = 1.25;
+        const gapMultiplier = speedGap / 200;  // 0 to 1+ range
+        const musicRate = baseRate + (gapMultiplier * 1.25);  // 1.25x to 2.5x+
+        const clampedRate = Math.max(1.0, Math.min(3.0, musicRate));
+        bgMusic.setRate(clampedRate);
+    }
+
     // Move player forward based on character speed
     const characterMovement = (characterSpeed * delta) / 1000;
     const worldMovement = (worldSpeed * delta) / 1000;
@@ -1533,12 +1650,7 @@ function update(time, delta) {
 
     // Check if player has reached the sync threshold (75% of screen)
     if (player.x >= gameOptions.syncThresholdX) {
-        // Sync world speed to character speed
-        worldSpeed = characterSpeed;
-        gameOptions.baseSpeed = characterSpeed;  // New baseline for future calculations
-        gameOptions.characterBaseSpeed = characterSpeed;
-
-        // Reset player position to start position
+        // Just reset position, don't update base speeds (prevents exponential growth bug)
         player.x = gameOptions.playerStartX;
     }
 
@@ -1632,7 +1744,6 @@ function update(time, delta) {
     // Update UI
     updatePlayerSegments();
     updateImbalanceIndicator();
-    updateSpeedIndicator();
 
     // Update debug panel if visible
     if (debugVisible) {
