@@ -187,6 +187,7 @@ let isFirstStart = true;
 
 // Music and sound effects
 let bgMusic;
+let deathMusic;
 let pickupSound;
 
 // Screen size toggle
@@ -237,6 +238,7 @@ function preload() {
 
     // Load music and sound effects
     this.load.audio('bgMusic', 'music/main-theme-eg.wav');
+    this.load.audio('deathMusic', 'music/death-music.mp3');
     this.load.audio('pickupSound', 'music/blink.wav');
 }
 
@@ -940,6 +942,14 @@ function create() {
         });
     }
 
+    // Create death music if not already created
+    if (!deathMusic) {
+        deathMusic = this.sound.add('deathMusic', {
+            loop: false,
+            volume: 0.5
+        });
+    }
+
     // Create pickup sound if not already created
     if (!pickupSound) {
         pickupSound = this.sound.add('pickupSound', {
@@ -1609,6 +1619,23 @@ function gameOver() {
 
     this.cameras.main.shake(300, 0.02);
 
+    // Stop current music and play death music
+    if (bgMusic && bgMusic.isPlaying) {
+        bgMusic.stop();
+    }
+
+    if (deathMusic) {
+        deathMusic.play();
+
+        // When death music ends, resume main theme at half speed
+        deathMusic.once('complete', () => {
+            if (bgMusic) {
+                bgMusic.setRate(0.625);  // Half of base 1.25 rate
+                bgMusic.play();
+            }
+        });
+    }
+
     // Stop spawning
     if (obstacleTimer) obstacleTimer.destroy();
     if (colorSpawnTimer) colorSpawnTimer.destroy();
@@ -1639,6 +1666,17 @@ function restartGame() {
 
     // Kill all active tweens to prevent them corrupting recycled objects
     this.tweens.killAll();
+
+    // Stop death music if playing
+    if (deathMusic && deathMusic.isPlaying) {
+        deathMusic.stop();
+    }
+
+    // Reset bgMusic rate for next game
+    if (bgMusic) {
+        bgMusic.stop();
+        bgMusic.setRate(1.25);  // Reset to base rate
+    }
 
     // Reset game state
     slowSpeedTimer = 0;
