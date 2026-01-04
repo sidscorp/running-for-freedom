@@ -7,7 +7,7 @@ const gameOptions = {
     jumpForce: 450,
     gravity: 1200,
     playerHeight: 48,
-    playerWidth: 32,
+    playerWidth: 48,   // Updated for square PNG sprites
     playerDuckHeight: 24,
     // Color collection system
     colorTypes: ['red', 'blue', 'green', 'yellow'],
@@ -169,6 +169,8 @@ let areObstaclesEnabled = false;  // Disabled by default
 let debugContainer;
 let debugVisible = false;
 let debugTexts = {};
+let helpContainer;
+let helpVisible = false;
 let currentPenalty = 0;
 
 // Game state management
@@ -187,8 +189,21 @@ let isFirstStart = true;
 let bgMusic;
 let pickupSound;
 
+// Screen size toggle
+let isSmallScreen = false;
+const SCREEN_SIZES = {
+    large: { width: 800, height: 450 },
+    small: { width: 480, height: 320 }
+};
+
 function preload() {
-    createPixelCharacter.call(this);
+    // Load character sprites (replacing procedural generation)
+    this.load.image('player_run1', 'images/character/run1.png');
+    this.load.image('player_run2', 'images/character/run2.png');
+    this.load.image('player_jump', 'images/character/jump.png');
+    this.load.image('player_duck', 'images/character/duck.png');
+    this.load.image('player_dead', 'images/character/death.png');
+
     createObstacles.call(this);
     createColorCollectibles.call(this);
     createDeathParticles.call(this);
@@ -223,116 +238,6 @@ function preload() {
     // Load music and sound effects
     this.load.audio('bgMusic', 'music/main-theme-eg.wav');
     this.load.audio('pickupSound', 'music/blink.wav');
-}
-
-// ============ PIXEL ART CREATION FUNCTIONS ============
-
-function createPixelCharacter() {
-    const scale = 1;
-    createCharFrame.call(this, 'player_run1', scale, 'run1');
-    createCharFrame.call(this, 'player_run2', scale, 'run2');
-    createCharFrame.call(this, 'player_run3', scale, 'run3');
-    createCharFrame.call(this, 'player_run4', scale, 'run4');
-    createCharFrame.call(this, 'player_jump', scale, 'jump');
-    createCharFrame.call(this, 'player_duck', scale, 'duck');
-    createCharFrame.call(this, 'player_dead', scale, 'dead');
-}
-
-function createCharFrame(key, scale, pose) {
-    const g = this.make.graphics({ x: 0, y: 0, add: false });
-    const s = 2;
-
-    if (pose === 'duck') {
-        const w = 16 * s, h = 24 * s; // Full height to match other frames
-        const yOff = 16 * s; // Push graphics to bottom
-        
-        g.fillStyle(colors.skin);
-        g.fillRect(10*s, 0*s + yOff, 4*s, 4*s);
-        g.fillStyle(colors.hair);
-        g.fillRect(12*s, 0*s + yOff, 2*s, 2*s);
-        g.fillStyle(colors.shirt);
-        g.fillRect(4*s, 2*s + yOff, 8*s, 4*s);
-        g.fillStyle(colors.pants);
-        g.fillRect(0*s, 4*s + yOff, 6*s, 4*s);
-        g.generateTexture(key, w, h);
-    } else if (pose === 'dead') {
-        const w = 16 * s, h = 24 * s;
-        // Shirt
-        g.fillStyle(colors.shirt);
-        g.fillRect(4*s, 7*s, 8*s, 7*s);
-        // Pants
-        g.fillStyle(colors.pants);
-        g.fillRect(4*s, 14*s, 8*s, 4*s);
-        // Legs (collapsed)
-        g.fillRect(2*s, 18*s, 4*s, 2*s);
-        g.fillRect(10*s, 18*s, 4*s, 2*s);
-        g.fillRect(0*s, 20*s, 2*s, 2*s); // feet
-        g.fillRect(14*s, 20*s, 2*s, 2*s);
-        
-        // Blood spurts from neck
-        g.fillStyle(0xcc0000);
-        g.fillRect(6*s, 6*s, 4*s, 1*s);
-        g.fillRect(5*s, 5*s, 1*s, 2*s);
-        g.fillRect(10*s, 5*s, 1*s, 2*s);
-
-        g.generateTexture(key, w, h);
-    } else {
-        const w = 16 * s, h = 24 * s;
-        g.fillStyle(colors.hair);
-        g.fillRect(5*s, 0*s, 6*s, 3*s);
-        g.fillStyle(colors.skin);
-        g.fillRect(5*s, 2*s, 6*s, 5*s);
-        g.fillStyle(0x000000);
-        g.fillRect(9*s, 3*s, 2*s, 2*s);
-        g.fillStyle(colors.shirt);
-        g.fillRect(4*s, 7*s, 8*s, 7*s);
-        g.fillStyle(colors.skin);
-        if (pose === 'jump') {
-            g.fillRect(2*s, 5*s, 2*s, 4*s);
-            g.fillRect(12*s, 5*s, 2*s, 4*s);
-        } else {
-            if (pose === 'run1' || pose === 'run3') {
-                g.fillRect(2*s, 8*s, 2*s, 4*s);
-                g.fillRect(12*s, 10*s, 2*s, 4*s);
-            } else {
-                g.fillRect(2*s, 10*s, 2*s, 4*s);
-                g.fillRect(12*s, 8*s, 2*s, 4*s);
-            }
-        }
-        g.fillStyle(colors.pants);
-        g.fillRect(4*s, 14*s, 8*s, 4*s);
-        if (pose === 'jump') {
-            g.fillRect(4*s, 18*s, 3*s, 4*s);
-            g.fillRect(9*s, 18*s, 3*s, 4*s);
-        } else if (pose === 'run1') {
-            g.fillRect(3*s, 18*s, 3*s, 6*s);
-            g.fillRect(10*s, 18*s, 3*s, 4*s);
-        } else if (pose === 'run2') {
-            g.fillRect(5*s, 18*s, 3*s, 5*s);
-            g.fillRect(8*s, 18*s, 3*s, 5*s);
-        } else if (pose === 'run3') {
-            g.fillRect(10*s, 18*s, 3*s, 6*s);
-            g.fillRect(3*s, 18*s, 3*s, 4*s);
-        } else if (pose === 'run4') {
-            g.fillRect(5*s, 18*s, 3*s, 5*s);
-            g.fillRect(8*s, 18*s, 3*s, 5*s);
-        }
-        g.fillStyle(0x222222);
-        if (pose !== 'jump') {
-            if (pose === 'run1') {
-                g.fillRect(2*s, 22*s, 4*s, 2*s);
-                g.fillRect(10*s, 20*s, 4*s, 2*s);
-            } else if (pose === 'run3') {
-                g.fillRect(10*s, 22*s, 4*s, 2*s);
-                g.fillRect(2*s, 20*s, 4*s, 2*s);
-            } else {
-                g.fillRect(4*s, 21*s, 4*s, 2*s);
-                g.fillRect(8*s, 21*s, 4*s, 2*s);
-            }
-        }
-        g.generateTexture(key, w, h);
-    }
-    g.destroy();
 }
 
 // ============ BACKGROUND SYSTEM ============
@@ -708,13 +613,13 @@ function toggleDebugPanel() {
 }
 
 function createHelpBox() {
-    const helpContainer = this.add.container(10, 10);
+    helpContainer = this.add.container(10, 10);
     helpContainer.setDepth(100);
 
     // Background
     const bg = this.add.graphics();
     bg.fillStyle(0x000000, 0.65);
-    bg.fillRect(0, 0, 180, 120);
+    bg.fillRect(0, 0, 180, 134);
     helpContainer.add(bg);
 
     // Title
@@ -752,7 +657,8 @@ function createHelpBox() {
         'P: Pause',
         'M: Toggle Music',
         'O: Toggle Obstacles',
-        'D: Debug Panel'
+        'D: Debug Panel',
+        'H: Help'
     ];
 
     controls.forEach(control => {
@@ -760,6 +666,14 @@ function createHelpBox() {
         helpContainer.add(text);
         yPos += lineHeight;
     });
+
+    // Initially hidden
+    helpContainer.setVisible(false);
+}
+
+function toggleHelpBox() {
+    helpVisible = !helpVisible;
+    helpContainer.setVisible(helpVisible);
 }
 
 function createStartScreen() {
@@ -1054,12 +968,19 @@ function create() {
         gameOptions.groundY - gameOptions.playerHeight - 20, // Spawn well above ground
         'player_run1'
     );
+    player.setScale(0.5);  // Scale 94px sprites down to ~47px
+    player.setOrigin(0.5, 1);  // Anchor at feet for ground alignment
     player.setGravityY(gameOptions.gravity);
-    
+
+    // Set physics body to match scaled sprite size
+    // Offset moves collision box up, so sprite renders lower (on road surface)
+    player.body.setSize(94, 94);
+    player.body.setOffset(0, -20);
+
     // Configure world bounds to allow left exit and bottom exit (falling death)
     this.physics.world.setBoundsCollision(false, true, true, false);
     player.setCollideWorldBounds(true);
-    
+
     player.setDepth(10);
 
     // Collisions
@@ -1080,6 +1001,7 @@ function create() {
     this.input.keyboard.on('keydown-O', toggleObstacles, this);
     this.input.keyboard.on('keydown-D', toggleDebugPanel, this);
     this.input.keyboard.on('keydown-M', toggleMusic, this);
+    this.input.keyboard.on('keydown-H', toggleHelpBox, this);
 
     // DON'T start spawning immediately - wait for startGame() to be called
 
@@ -1579,6 +1501,37 @@ function toggleMusic() {
     });
 }
 
+function toggleScreenSize() {
+    isSmallScreen = !isSmallScreen;
+    const size = isSmallScreen ? SCREEN_SIZES.small : SCREEN_SIZES.large;
+
+    // Resize the game canvas
+    game.scale.resize(size.width, size.height);
+
+    const label = isSmallScreen ? "480x320" : "800x450";
+    const feedback = this.add.text(
+        size.width / 2,
+        size.height / 2 - 50,
+        `SCREEN: ${label}`,
+        {
+            fontSize: '24px',
+            fill: '#ffffff',
+            fontFamily: 'monospace',
+            fontStyle: 'bold',
+            stroke: '#000000',
+            strokeThickness: 4
+        }
+    ).setOrigin(0.5).setDepth(300);
+
+    this.tweens.add({
+        targets: feedback,
+        alpha: 0,
+        y: size.height / 2 - 100,
+        duration: 1000,
+        onComplete: () => feedback.destroy()
+    });
+}
+
 function jump() {
     const onGround = player.body.blocked.down || player.body.touching.down;
 
@@ -1600,8 +1553,9 @@ function startDuck() {
     if (onGround && !isJumping) {
         isDucking = true;
         player.setTexture('player_duck');
-        player.body.setSize(32, gameOptions.playerDuckHeight);
-        player.body.setOffset(0, 24);
+        // Shrink hitbox to half height, offset to bottom of sprite
+        player.body.setSize(94, 47);
+        player.body.setOffset(0, 47);
     }
 }
 
@@ -1609,7 +1563,8 @@ function stopDuck() {
     if (isDucking) {
         isDucking = false;
         player.setTexture('player_run1');
-        player.body.setSize(32, gameOptions.playerHeight);
+        // Restore full hitbox
+        player.body.setSize(94, 94);
         player.body.setOffset(0, 0);
     }
 }
@@ -1676,6 +1631,7 @@ function restartGame() {
     this.input.keyboard.off('keydown-O', toggleObstacles, this);
     this.input.keyboard.off('keydown-D', toggleDebugPanel, this);
     this.input.keyboard.off('keydown-M', toggleMusic, this);
+    this.input.keyboard.off('keydown-H', toggleHelpBox, this);
 
     // Remove restart listeners
     this.input.off('pointerdown', restartGame, this);
@@ -1795,12 +1751,12 @@ function update(time, delta) {
     distanceScore += (characterSpeed * delta) / 1000;
     distanceText.setText('DISTANCE: ' + Math.floor(distanceScore));
 
-    // Run animation
+    // Run animation (2-frame loop with PNG sprites)
     if (onGround && !isDucking && !isJumping) {
         runAnimTimer += delta;
         if (runAnimTimer > 80) {
             runAnimTimer = 0;
-            runFrame = (runFrame + 1) % 4;
+            runFrame = (runFrame + 1) % 2;  // 2 frames instead of 4
             player.setTexture('player_run' + (runFrame + 1));
         }
     }
