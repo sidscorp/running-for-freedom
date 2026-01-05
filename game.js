@@ -223,10 +223,10 @@ function preload() {
     createObstacles.call(this);
     createDeathParticles.call(this);
 
-    // Load coin icon SVGs (will be combined with rings in create())
-    this.load.svg('icon_identity', 'images/coins/identity.svg', { width: 32, height: 32 });
-    this.load.svg('icon_approval', 'images/coins/approval.svg', { width: 32, height: 32 });
-    this.load.svg('icon_money', 'images/coins/money.svg', { width: 32, height: 32 });
+    // Load coin sprite sheets (8 frames each, 52x52 per frame)
+    this.load.spritesheet('coin_identity', 'images/coins/identity-coin.png', { frameWidth: 52, frameHeight: 52 });
+    this.load.spritesheet('coin_approval', 'images/coins/approval-coin.png', { frameWidth: 52, frameHeight: 52 });
+    this.load.spritesheet('coin_money', 'images/coins/coin-coin.png', { frameWidth: 52, frameHeight: 52 });
 
     // Load background images
     this.load.image('bg_sky', 'images/backgrounds/Sky.png');
@@ -418,45 +418,21 @@ function createDeathParticles() {
     g.destroy();
 }
 
-function createCoinTextures() {
-    // Skip if textures already exist (scene restart)
-    if (this.textures.exists('coin_identity')) {
+function createCoinAnimations() {
+    // Skip if animations already exist (scene restart)
+    if (this.anims.exists('coin_identity_spin')) {
         return;
     }
 
-    const coinSize = 36;  // Smaller coin
-    const iconSize = 20;  // Icon cutout size
+    const coinTypes = ['identity', 'approval', 'money'];
 
-    const coinData = [
-        { name: 'identity', color: colors.collectibleIdentity },
-        { name: 'approval', color: colors.collectibleApproval },
-        { name: 'money', color: colors.collectibleMoney }
-    ];
-
-    coinData.forEach(coin => {
-        // Create canvas texture
-        const canvas = this.textures.createCanvas('coin_' + coin.name, coinSize, coinSize);
-        const ctx = canvas.context;
-
-        // Draw solid filled circle with border
-        const colorHex = '#' + coin.color.toString(16).padStart(6, '0');
-        ctx.fillStyle = colorHex;
-        ctx.beginPath();
-        ctx.arc(coinSize / 2, coinSize / 2, coinSize / 2 - 2, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = colorHex;
-        ctx.lineWidth = 5;
-        ctx.stroke();
-
-        // Cut out the icon shape using destination-out composite
-        ctx.globalCompositeOperation = 'destination-out';
-        const iconTexture = this.textures.get('icon_' + coin.name);
-        const iconSource = iconTexture.getSourceImage();
-        const offsetX = (coinSize - iconSize) / 2;
-        const offsetY = (coinSize - iconSize) / 2;
-        ctx.drawImage(iconSource, offsetX, offsetY, iconSize, iconSize);
-
-        canvas.refresh();
+    coinTypes.forEach(type => {
+        this.anims.create({
+            key: 'coin_' + type + '_spin',
+            frames: this.anims.generateFrameNumbers('coin_' + type, { start: 0, end: 7 }),
+            frameRate: 12,
+            repeat: -1
+        });
     });
 }
 
@@ -669,73 +645,27 @@ function createStartScreen() {
     startContainer = this.add.container(400, 225);
     startContainer.setDepth(250);
 
-    // Background with neon border
+    // Simple dark background box
     const bg = this.add.graphics();
-    bg.fillStyle(0x000000, 0.95);
-    bg.fillRect(-350, -200, 700, 400);
-    // Neon cyan border
-    bg.lineStyle(3, 0x00d1cc, 1);
-    bg.strokeRect(-350, -200, 700, 400);
-    // Inner glow effect
-    bg.lineStyle(1, 0x00d1cc, 0.5);
-    bg.strokeRect(-347, -197, 694, 394);
+    bg.fillStyle(0x000000, 0.9);
+    bg.fillRect(-180, -60, 360, 120);
     startContainer.add(bg);
 
-    // Title with neon glow
-    const title = this.add.text(0, -140, 'ENDLESS RUNNER', {
-        fontSize: '52px',
-        fill: '#00d1cc',
+    // Game title in yellow
+    const title = this.add.text(0, -30, 'RUNNING FOR FREEDOM', {
+        fontSize: '24px',
+        fill: '#C9A84E',
         fontFamily: 'monospace',
-        fontStyle: 'bold',
-        shadow: {
-            offsetX: 0,
-            offsetY: 0,
-            color: '#00d1cc',
-            blur: 15,
-            fill: true
-        }
+        fontStyle: 'bold'
     });
     title.setOrigin(0.5);
     startContainer.add(title);
 
-    // Instructions
-    const instructions = [
-        'COLLECT COLORS TO GAIN SPEED',
-        'KEEP COLORS BALANCED',
-        '',
-        'SPACE: Jump (Double Jump)',
-        'DOWN: Duck',
-        'M: Music  |  O: Obstacles',
-        'P: Pause  |  D: Debug Panel'
-    ];
-
-    let yPos = -60;
-    instructions.forEach((line, index) => {
-        const textStyle = {
-            fontSize: line === '' ? '8px' : (index < 2 ? '14px' : '12px'),
-            fill: index < 2 ? '#ffffff' : '#aaaaaa',
-            fontFamily: 'monospace',
-            fontStyle: index < 2 ? 'bold' : 'normal'
-        };
-        const text = this.add.text(0, yPos, line, textStyle);
-        text.setOrigin(0.5);
-        startContainer.add(text);
-        yPos += line === '' ? 8 : (index < 2 ? 22 : 18);
-    });
-
     // Start prompt with pulsing effect
-    const startPrompt = this.add.text(0, 140, 'PRESS SPACE OR CLICK TO START', {
-        fontSize: '18px',
-        fill: '#00ff00',
-        fontFamily: 'monospace',
-        fontStyle: 'bold',
-        shadow: {
-            offsetX: 0,
-            offsetY: 0,
-            color: '#00ff00',
-            blur: 10,
-            fill: true
-        }
+    const startPrompt = this.add.text(0, 15, 'Click or press SPACE to start', {
+        fontSize: '14px',
+        fill: '#ffffff',
+        fontFamily: 'monospace'
     });
     startPrompt.setOrigin(0.5);
     startContainer.add(startPrompt);
@@ -743,7 +673,7 @@ function createStartScreen() {
     // Pulsing animation
     this.tweens.add({
         targets: startPrompt,
-        alpha: 0.3,
+        alpha: 0.4,
         duration: 800,
         yoyo: true,
         repeat: -1,
@@ -758,97 +688,48 @@ function createGameOverScreen() {
     gameOverContainer = this.add.container(400, 225);
     gameOverContainer.setDepth(250);
 
-    // Background with neon border
+    // Simple dark background box
     const bg = this.add.graphics();
-    bg.fillStyle(0x000000, 0.95);
-    bg.fillRect(-300, -180, 600, 360);
-    // Neon red border
-    bg.lineStyle(3, 0xff2e63, 1);
-    bg.strokeRect(-300, -180, 600, 360);
-    // Inner glow effect
-    bg.lineStyle(1, 0xff2e63, 0.5);
-    bg.strokeRect(-297, -177, 594, 354);
+    bg.fillStyle(0x000000, 0.9);
+    bg.fillRect(-180, -80, 360, 160);
     gameOverContainer.add(bg);
 
-    // Game Over title with neon glow
-    const title = this.add.text(0, -120, 'GAME OVER', {
-        fontSize: '56px',
-        fill: '#ff2e63',
+    // Game Over title in yellow
+    const title = this.add.text(0, -50, 'GAME OVER', {
+        fontSize: '28px',
+        fill: '#C9A84E',
         fontFamily: 'monospace',
-        fontStyle: 'bold',
-        shadow: {
-            offsetX: 0,
-            offsetY: 0,
-            color: '#ff2e63',
-            blur: 20,
-            fill: true
-        }
+        fontStyle: 'bold'
     });
     title.setOrigin(0.5);
     gameOverContainer.add(title);
 
-    // Distance label
-    const distanceLabel = this.add.text(0, -20, 'DISTANCE', {
-        fontSize: '20px',
-        fill: '#888888',
-        fontFamily: 'monospace'
-    });
-    distanceLabel.setOrigin(0.5);
-    gameOverContainer.add(distanceLabel);
-
     // Score value (will be updated when shown)
-    const scoreValue = this.add.text(0, 30, '0', {
-        fontSize: '64px',
+    const scoreValue = this.add.text(0, 0, '0', {
+        fontSize: '36px',
         fill: '#ffffff',
         fontFamily: 'monospace',
-        fontStyle: 'bold',
-        shadow: {
-            offsetX: 0,
-            offsetY: 0,
-            color: '#ffffff',
-            blur: 10,
-            fill: true
-        }
+        fontStyle: 'bold'
     });
     scoreValue.setOrigin(0.5);
     scoreValue.setName('scoreValue');
     gameOverContainer.add(scoreValue);
 
-    // Restart button with neon effect
-    const restartButton = this.add.graphics();
-    restartButton.fillStyle(0x000000, 1);
-    restartButton.fillRect(-120, 100, 240, 50);
-    // Neon green border
-    restartButton.lineStyle(3, 0x00ff00, 1);
-    restartButton.strokeRect(-120, 100, 240, 50);
-    // Inner glow
-    restartButton.lineStyle(1, 0x00ff00, 0.5);
-    restartButton.strokeRect(-117, 103, 234, 44);
-    gameOverContainer.add(restartButton);
-
-    // Restart text
-    const restartText = this.add.text(0, 125, 'RESTART', {
-        fontSize: '24px',
-        fill: '#00ff00',
-        fontFamily: 'monospace',
-        fontStyle: 'bold',
-        shadow: {
-            offsetX: 0,
-            offsetY: 0,
-            color: '#00ff00',
-            blur: 10,
-            fill: true
-        }
+    // Restart prompt with pulsing effect
+    const restartText = this.add.text(0, 45, 'Click or press SPACE to restart', {
+        fontSize: '14px',
+        fill: '#ffffff',
+        fontFamily: 'monospace'
     });
     restartText.setOrigin(0.5);
     restartText.setName('restartText');
     gameOverContainer.add(restartText);
 
-    // Pulsing animation for restart button
+    // Pulsing animation
     this.tweens.add({
         targets: restartText,
-        alpha: 0.5,
-        duration: 600,
+        alpha: 0.4,
+        duration: 800,
         yoyo: true,
         repeat: -1,
         ease: 'Sine.easeInOut'
@@ -966,8 +847,8 @@ function create() {
     // Create PNG-based background system (sky, buildings, light, road)
     createBackgroundSystem.call(this);
 
-    // Create combined coin textures (ring + icon)
-    createCoinTextures.call(this);
+    // Create coin spin animations from sprite sheets
+    createCoinAnimations.call(this);
 
     // Ground collider - positioned so TOP is at road surface (gameOptions.groundY)
     // Center at groundY + 20 so collider extends from Y=404 to Y=444
@@ -1142,7 +1023,7 @@ function updatePieChart() {
     });
 
     // Draw border
-    pieChartGraphics.lineStyle(1, 0xffffff, 0.6);
+    pieChartGraphics.lineStyle(1, 0x070B12, 1);
     pieChartGraphics.strokeCircle(centerX, centerY, radius);
 }
 
@@ -1287,7 +1168,7 @@ function spawnObstacle() {
 
 function spawnColorCollectible() {
     const colorType = selectColorToSpawn();
-    const textureKey = 'coin_' + colorType;  // Use SVG coin textures
+    const textureKey = 'coin_' + colorType;
 
     let collectible;
     const pooled = colorCollectiblePool.getChildren().find(c => c.colorType === colorType);
@@ -1309,6 +1190,7 @@ function spawnColorCollectible() {
 
     collectible.colorType = colorType;
     collectible.x = 850;
+    collectible.setScale(0.5);  // Scale down to 50%
     collectible.setDepth(8);  // Between ground layers and player (depth 10)
 
     // Random height: from ground level (runnable) to jump height
@@ -1317,7 +1199,10 @@ function spawnColorCollectible() {
     const maxY = gameOptions.groundY - 10;   // Very low point (below duck height)
     collectible.y = Phaser.Math.Between(minY, maxY);
     collectible.setVelocityX(-worldSpeed);
-    collectible.rotationPhase = Math.random() * Math.PI * 2;  // Random start phase for rotation
+
+    // Play spin animation (starts at random frame for variety)
+    collectible.play('coin_' + colorType + '_spin');
+    collectible.anims.setProgress(Math.random());
 }
 
 function selectColorToSpawn() {
@@ -1384,7 +1269,7 @@ function collectColorItem(playerSprite, collectible) {
         onComplete: () => {
             collectible.setScale(1);
             collectible.setAlpha(1);
-            collectible.rotationPhase = 0;  // Reset rotation for reuse
+            collectible.anims.stop();  // Stop animation for reuse
             collectible.setActive(false);
             collectible.setVisible(false);
             collectible.setVelocityX(0);
@@ -1976,14 +1861,9 @@ function update(time, delta) {
         }
     }
 
-    // Animate collectibles with scaleX rotation
+    // Update collectible velocities (animation is handled by sprite sheet)
     colorCollectibleGroup.getChildren().forEach(collectible => {
         if (collectible.active) {
-            // scaleX flip animation (full rotation every ~500ms)
-            collectible.rotationPhase = (collectible.rotationPhase || 0) + delta * 0.008;
-            collectible.scaleX = Math.cos(collectible.rotationPhase);
-
-            // Update velocity to match current speed
             collectible.setVelocityX(-worldSpeed);
         }
     });
