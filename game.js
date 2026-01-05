@@ -10,7 +10,7 @@ const gameOptions = {
     playerWidth: 48,   // Updated for square PNG sprites
     playerDuckHeight: 24,
     // Color collection system
-    colorTypes: ['red', 'blue', 'green', 'yellow'],
+    colorTypes: ['identity', 'approval', 'money'],
     maxColorSegments: 13,
     maxPercentageDifference: 10,  // Percentage difference threshold for imbalance (strict!)
     baseSpeed: 300,
@@ -20,7 +20,7 @@ const gameOptions = {
     colorSpawnInterval: [400, 900],
     unitsPerPickup: 10,
     maxSpeed: 800,  // Speed cap to prevent game from becoming unplayable
-    syncThresholdX: 600,  // 75% of screen width (800px * 0.75)
+    edgeCapX: 640,  // 80% of screen width - speed cap zone (can't outrun world speed here)
 };
 
 // Color palette (NES-inspired)
@@ -50,18 +50,15 @@ const colors = {
     trash: 0x4a4a4a,
     drone: 0x7a7a7a,
 
-    // --- Collectibles (bright but controlled) ---
-    collectibleRed: 0xe84b4b,
-    collectibleRedLight: 0xf08a8a,
+    // --- Collectibles (3 ghost types) ---
+    collectibleIdentity: 0xcc0000,
+    collectibleIdentityLight: 0xff4444,
 
-    collectibleBlue: 0x4a7cff,
-    collectibleBlueLight: 0x8fb0ff,
+    collectibleApproval: 0x2462ff,
+    collectibleApprovalLight: 0x5a8aff,
 
-    collectibleGreen: 0x4ddc73,
-    collectibleGreenLight: 0x8ff0ae,
-
-    collectibleYellow: 0xe6d94c,
-    collectibleYellowLight: 0xf2ec9a,
+    collectibleMoney: 0xdfdfdf,
+    collectibleMoneyLight: 0xffffff,
 
     // --- UI / Warnings ---
     imbalanceWarning: 0xff3b3b,
@@ -150,8 +147,7 @@ let colorQueue = [];  // Array of color strings, max 13 elements (FIFO queue)
 let colorCollectibleGroup;
 let colorCollectiblePool;
 let colorSpawnTimer;
-let playerSegmentContainer;
-let playerSegments = [];  // Array of graphics objects for each segment
+let pieChartGraphics;  // Pie chart showing color balance
 let characterSpeed;
 let worldSpeed;
 let timeSpeedBonus = 0;
@@ -197,6 +193,25 @@ const SCREEN_SIZES = {
     small: { width: 480, height: 320 }
 };
 
+// Ghost helper system
+let ghostSprite = null;
+let ghostParticles = null;
+let ghostLaugh = null;
+let ghostRunSound = null;
+let ghostActive = false;
+let ghostTriggered = false;  // Prevents re-triggering until player recovers
+const GHOST_TRIGGER_X = 200;  // 25% from left edge (200/800)
+const GHOST_APPROACH_SPEED = 800;  // Fast approach from left
+const GHOST_RUN_AWAY_SPEED = 600;  // Speed when running away
+
+// Ghost phases
+const GHOST_PHASE = {
+    APPROACHING: 'approaching',    // Running from left to player
+    RUNNING_WITH: 'running_with',  // Matching player speed, laugh playing
+    RUNNING_AWAY: 'running_away'   // Running off to the right
+};
+let ghostPhase = null;
+
 function preload() {
     // Load character sprites (replacing procedural generation)
     this.load.image('player_run1', 'images/character/run1.png');
@@ -206,8 +221,12 @@ function preload() {
     this.load.image('player_dead', 'images/character/death.png');
 
     createObstacles.call(this);
-    createColorCollectibles.call(this);
     createDeathParticles.call(this);
+
+    // Load coin icon SVGs (will be combined with rings in create())
+    this.load.svg('icon_identity', 'images/coins/identity.svg', { width: 32, height: 32 });
+    this.load.svg('icon_approval', 'images/coins/approval.svg', { width: 32, height: 32 });
+    this.load.svg('icon_money', 'images/coins/money.svg', { width: 32, height: 32 });
 
     // Load background images
     this.load.image('bg_sky', 'images/backgrounds/Sky.png');
@@ -240,6 +259,18 @@ function preload() {
     this.load.audio('bgMusic', 'music/main-theme-eg.wav');
     this.load.audio('deathMusic', 'music/death-music.mp3');
     this.load.audio('pickupSound', 'music/blink.wav');
+
+    // Load ghost sprites
+    this.load.image('ghost_identity_1', 'images/ghost/Identity-Run1.png');
+    this.load.image('ghost_identity_2', 'images/ghost/Identity-Run2.png');
+    this.load.image('ghost_approval_1', 'images/ghost/Approval-Run1.png');
+    this.load.image('ghost_approval_2', 'images/ghost/Approval-Run2.png');
+    this.load.image('ghost_money_1', 'images/ghost/Money-Run1.png');
+    this.load.image('ghost_money_2', 'images/ghost/Money-Run2.png');
+
+    // Load ghost audio
+    this.load.audio('ghostLaugh', 'music/ghost-laugh.mp3');
+    this.load.audio('ghostRun', 'music/ghost-run.mp3');
 }
 
 // ============ BACKGROUND SYSTEM ============
@@ -387,6 +418,48 @@ function createDeathParticles() {
     g.destroy();
 }
 
+function createCoinTextures() {
+    // Skip if textures already exist (scene restart)
+    if (this.textures.exists('coin_identity')) {
+        return;
+    }
+
+    const coinSize = 36;  // Smaller coin
+    const iconSize = 20;  // Icon cutout size
+
+    const coinData = [
+        { name: 'identity', color: colors.collectibleIdentity },
+        { name: 'approval', color: colors.collectibleApproval },
+        { name: 'money', color: colors.collectibleMoney }
+    ];
+
+    coinData.forEach(coin => {
+        // Create canvas texture
+        const canvas = this.textures.createCanvas('coin_' + coin.name, coinSize, coinSize);
+        const ctx = canvas.context;
+
+        // Draw solid filled circle with border
+        const colorHex = '#' + coin.color.toString(16).padStart(6, '0');
+        ctx.fillStyle = colorHex;
+        ctx.beginPath();
+        ctx.arc(coinSize / 2, coinSize / 2, coinSize / 2 - 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = colorHex;
+        ctx.lineWidth = 5;
+        ctx.stroke();
+
+        // Cut out the icon shape using destination-out composite
+        ctx.globalCompositeOperation = 'destination-out';
+        const iconTexture = this.textures.get('icon_' + coin.name);
+        const iconSource = iconTexture.getSourceImage();
+        const offsetX = (coinSize - iconSize) / 2;
+        const offsetY = (coinSize - iconSize) / 2;
+        ctx.drawImage(iconSource, offsetX, offsetY, iconSize, iconSize);
+
+        canvas.refresh();
+    });
+}
+
 function createObstacles() {
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const s = 3;
@@ -426,63 +499,6 @@ function createObstacles() {
     g.destroy();
 }
 
-function createColorCollectibles() {
-    const g = this.make.graphics({ x: 0, y: 0, add: false });
-    const s = 3;
-
-    const colorData = [
-        { name: 'red', main: colors.collectibleRed, light: colors.collectibleRedLight },
-        { name: 'blue', main: colors.collectibleBlue, light: colors.collectibleBlueLight },
-        { name: 'green', main: colors.collectibleGreen, light: colors.collectibleGreenLight },
-        { name: 'yellow', main: colors.collectibleYellow, light: colors.collectibleYellowLight }
-    ];
-
-    colorData.forEach(color => {
-        // Frame 1 - Full diamond
-        g.fillStyle(color.main);
-        g.fillRect(3*s, 0*s, 2*s, 1*s);
-        g.fillRect(2*s, 1*s, 4*s, 1*s);
-        g.fillRect(1*s, 2*s, 6*s, 1*s);
-        g.fillRect(0*s, 3*s, 8*s, 2*s);
-        g.fillRect(1*s, 5*s, 6*s, 1*s);
-        g.fillRect(2*s, 6*s, 4*s, 1*s);
-        g.fillRect(3*s, 7*s, 2*s, 1*s);
-        g.fillStyle(color.light);
-        g.fillRect(2*s, 2*s, 2*s, 2*s);
-        g.generateTexture('collectible_' + color.name + '_1', 8*s, 8*s);
-        g.clear();
-
-        // Frame 2 - Slightly narrower
-        g.fillStyle(color.main);
-        g.fillRect(3*s, 0*s, 2*s, 1*s);
-        g.fillRect(2*s, 1*s, 4*s, 6*s);
-        g.fillRect(3*s, 7*s, 2*s, 1*s);
-        g.fillStyle(color.light);
-        g.fillRect(2*s, 2*s, 2*s, 2*s);
-        g.generateTexture('collectible_' + color.name + '_2', 8*s, 8*s);
-        g.clear();
-
-        // Frame 3 - Thin edge
-        g.fillStyle(color.main);
-        g.fillRect(3*s, 0*s, 2*s, 8*s);
-        g.fillStyle(color.light);
-        g.fillRect(3*s, 1*s, 1*s, 2*s);
-        g.generateTexture('collectible_' + color.name + '_3', 8*s, 8*s);
-        g.clear();
-
-        // Frame 4 - Back to slightly narrow
-        g.fillStyle(color.main);
-        g.fillRect(3*s, 0*s, 2*s, 1*s);
-        g.fillRect(2*s, 1*s, 4*s, 6*s);
-        g.fillRect(3*s, 7*s, 2*s, 1*s);
-        g.fillStyle(color.light);
-        g.fillRect(4*s, 2*s, 2*s, 2*s);
-        g.generateTexture('collectible_' + color.name + '_4', 8*s, 8*s);
-        g.clear();
-    });
-
-    g.destroy();
-}
 
 // ============ DEBUG PANEL ============
 
@@ -490,14 +506,14 @@ function createDebugPanel() {
     debugContainer = this.add.container(590, 10);
     debugContainer.setDepth(150);
 
-    // Background
+    // Background (smaller)
     const bg = this.add.graphics();
     bg.fillStyle(0x000000, 0.75);
-    bg.fillRect(0, 0, 200, 200);
+    bg.fillRect(0, 0, 200, 120);
     debugContainer.add(bg);
 
     // Title
-    const title = this.add.text(100, 8, 'DEBUG PANEL', {
+    const title = this.add.text(100, 8, 'DEBUG', {
         fontSize: '12px',
         fill: '#ffffff',
         fontFamily: 'monospace',
@@ -510,8 +526,8 @@ function createDebugPanel() {
     const divider = this.add.graphics();
     divider.lineStyle(1, 0x666666);
     divider.beginPath();
-    divider.moveTo(10, 28);
-    divider.lineTo(190, 28);
+    divider.moveTo(10, 24);
+    divider.lineTo(190, 24);
     divider.strokePath();
     debugContainer.add(divider);
 
@@ -522,90 +538,62 @@ function createDebugPanel() {
         fontFamily: 'monospace'
     };
 
-    let yPos = 35;
+    let yPos = 30;
     const lineHeight = 16;
 
-    debugTexts.characterSpeed = this.add.text(10, yPos, 'SPD: 0', textStyle);
+    debugTexts.colors = this.add.text(10, yPos, 'I:00 (33%)  A:00 (33%)  M:00 (33%)', textStyle);
+    debugContainer.add(debugTexts.colors);
+    yPos += lineHeight;
+
+    debugTexts.characterSpeed = this.add.text(10, yPos, 'CHAR: 0', textStyle);
     debugContainer.add(debugTexts.characterSpeed);
     yPos += lineHeight;
 
-    debugTexts.worldSpeed = this.add.text(10, yPos, 'WLD: 0', textStyle);
+    debugTexts.worldSpeed = this.add.text(10, yPos, 'WORLD: 0', textStyle);
     debugContainer.add(debugTexts.worldSpeed);
     yPos += lineHeight;
 
-    debugTexts.position = this.add.text(10, yPos, 'POS: (0, 0)', textStyle);
-    debugContainer.add(debugTexts.position);
-    yPos += lineHeight;
-
-    debugTexts.colorsLine1 = this.add.text(10, yPos, 'R:00  B:00', textStyle);
-    debugContainer.add(debugTexts.colorsLine1);
-    yPos += lineHeight;
-
-    debugTexts.colorsLine2 = this.add.text(10, yPos, 'G:00  Y:00', textStyle);
-    debugContainer.add(debugTexts.colorsLine2);
-    yPos += lineHeight;
-
-    debugTexts.penalty = this.add.text(10, yPos, 'PENALTY: 0', textStyle);
-    debugContainer.add(debugTexts.penalty);
-    yPos += lineHeight;
-
-    debugTexts.bonus = this.add.text(10, yPos, 'BONUS: 0', textStyle);
-    debugContainer.add(debugTexts.bonus);
-    yPos += lineHeight;
-
-    debugTexts.differential = this.add.text(10, yPos, 'DIFF: 0 (0%)', textStyle);
-    debugContainer.add(debugTexts.differential);
+    debugTexts.modifier = this.add.text(10, yPos, 'BOOST: +0', textStyle);
+    debugContainer.add(debugTexts.modifier);
 
     // Initially hidden
     debugContainer.setVisible(false);
 }
 
 function updateDebugPanel() {
-    debugTexts.characterSpeed.setText('SPD: ' + Math.round(characterSpeed));
-    debugTexts.worldSpeed.setText('WLD: ' + Math.round(worldSpeed));
-    debugTexts.position.setText('POS: (' + Math.round(player.x) + ', ' + Math.round(player.y) + ')');
-
     // Calculate color counts and percentages from queue
-    const counts = { red: 0, blue: 0, green: 0, yellow: 0 };
+    const counts = { identity: 0, approval: 0, money: 0 };
     colorQueue.forEach(color => counts[color]++);
+    const total = colorQueue.length || 1;  // Avoid division by zero
 
-    debugTexts.colorsLine1.setText('R:' + String(counts.red).padStart(2, '0') + '  B:' + String(counts.blue).padStart(2, '0'));
-    debugTexts.colorsLine2.setText('G:' + String(counts.green).padStart(2, '0') + '  Y:' + String(counts.yellow).padStart(2, '0'));
+    const iPercent = Math.round((counts.identity / total) * 100);
+    const aPercent = Math.round((counts.approval / total) * 100);
+    const mPercent = Math.round((counts.money / total) * 100);
 
-    debugTexts.penalty.setText('PENALTY: ' + Math.round(currentPenalty));
-    debugTexts.bonus.setText('BONUS: ' + timeSpeedBonus);
+    debugTexts.colors.setText(
+        'I:' + String(counts.identity).padStart(2, '0') + '(' + iPercent + '%) ' +
+        'A:' + String(counts.approval).padStart(2, '0') + '(' + aPercent + '%) ' +
+        'M:' + String(counts.money).padStart(2, '0') + '(' + mPercent + '%)'
+    );
 
-    // Calculate and display differential
-    const diff = worldSpeed - characterSpeed;
-    const diffPercent = characterSpeed > 0 ? Math.round((diff / characterSpeed) * 100) : 0;
-    debugTexts.differential.setText('DIFF: ' + Math.round(diff) + ' (' + diffPercent + '%)');
+    debugTexts.characterSpeed.setText('CHAR: ' + Math.round(characterSpeed));
+    debugTexts.worldSpeed.setText('WORLD: ' + Math.round(worldSpeed));
 
-    // Color coding
+    // Show boost or penalty
     if (currentPenalty > 0) {
-        debugTexts.penalty.setFill('#ff6666');
+        debugTexts.modifier.setText('PENALTY: -' + Math.round(currentPenalty) + '%');
+        debugTexts.modifier.setFill('#ff6666');
     } else {
-        debugTexts.penalty.setFill('#ffffff');
-    }
-
-    if (timeSpeedBonus > 0) {
-        debugTexts.bonus.setFill('#66ff66');
-    } else {
-        debugTexts.bonus.setFill('#ffffff');
-    }
-
-    if (player.x >= gameOptions.syncThresholdX * 0.9) {
-        debugTexts.position.setFill('#ffff66');
-    } else {
-        debugTexts.position.setFill('#ffffff');
-    }
-
-    // Color code differential (negative = falling behind)
-    if (diff > 0) {
-        debugTexts.differential.setFill('#ff6666');  // Red = falling behind
-    } else if (diff < 0) {
-        debugTexts.differential.setFill('#66ff66');  // Green = ahead
-    } else {
-        debugTexts.differential.setFill('#ffffff');  // White = balanced
+        // Calculate boost (difference between char speed and base)
+        const base = gameOptions.characterBaseSpeed + timeSpeedBonus;
+        const boost = Math.round(characterSpeed - base);
+        if (boost > 0) {
+            debugTexts.modifier.setText('BOOST: +' + boost);
+            debugTexts.modifier.setFill('#66ff66');
+        } else {
+            debugTexts.modifier.setText('BOOST: 0');
+            debugTexts.modifier.setFill('#ffffff');
+        }
     }
 }
 
@@ -621,7 +609,7 @@ function createHelpBox() {
     // Background
     const bg = this.add.graphics();
     bg.fillStyle(0x000000, 0.65);
-    bg.fillRect(0, 0, 180, 134);
+    bg.fillRect(0, 0, 180, 120);
     helpContainer.add(bg);
 
     // Title
@@ -655,7 +643,6 @@ function createHelpBox() {
 
     const controls = [
         'SPACE: Jump (x2)',
-        'DOWN: Duck',
         'P: Pause',
         'M: Toggle Music',
         'O: Toggle Obstacles',
@@ -903,7 +890,7 @@ function startGame() {
 
     // Show gameplay UI
     distanceText.setVisible(true);
-    playerSegmentContainer.setVisible(true);
+    pieChartGraphics.setVisible(true);
 
     // Start background music
     if (bgMusic && !bgMusic.isPlaying) {
@@ -922,8 +909,13 @@ function create() {
     isJumping = false;
     isDucking = false;
     runFrame = 0;
-    colorQueue = [];  // Reset to empty queue
-    playerSegments = [];  // Reset segments array
+    // Pre-fill colorQueue with 4 of each color (balanced start: 4,4,4 = 12 items)
+    colorQueue = [];
+    for (let i = 0; i < 4; i++) {
+        colorQueue.push('identity');
+        colorQueue.push('approval');
+        colorQueue.push('money');
+    }
     characterSpeed = gameOptions.characterBaseSpeed;
     worldSpeed = gameOptions.baseSpeed;
     timeSpeedBonus = 0;
@@ -958,8 +950,24 @@ function create() {
         });
     }
 
+    // Create ghost sounds
+    if (!ghostLaugh) {
+        ghostLaugh = this.sound.add('ghostLaugh', {
+            volume: 0.5,
+            rate: 2.0  // 2x speed
+        });
+    }
+    if (!ghostRunSound) {
+        ghostRunSound = this.sound.add('ghostRun', {
+            volume: 0.5
+        });
+    }
+
     // Create PNG-based background system (sky, buildings, light, road)
     createBackgroundSystem.call(this);
+
+    // Create combined coin textures (ring + icon)
+    createCoinTextures.call(this);
 
     // Ground collider - positioned so TOP is at road surface (gameOptions.groundY)
     // Center at groundY + 20 so collider extends from Y=404 to Y=444
@@ -1003,10 +1011,11 @@ function create() {
     this.input.keyboard.on('keydown-SPACE', jump, this);
     this.input.keyboard.on('keydown-UP', jump, this);
     this.input.keyboard.on('keydown-W', jump, this);
-    this.input.keyboard.on('keydown-DOWN', startDuck, this);
-    this.input.keyboard.on('keydown-S', startDuck, this);
-    this.input.keyboard.on('keyup-DOWN', stopDuck, this);
-    this.input.keyboard.on('keyup-S', stopDuck, this);
+    // Duck disabled for now - can re-enable later
+    // this.input.keyboard.on('keydown-DOWN', startDuck, this);
+    // this.input.keyboard.on('keydown-S', startDuck, this);
+    // this.input.keyboard.on('keyup-DOWN', stopDuck, this);
+    // this.input.keyboard.on('keyup-S', stopDuck, this);
     this.input.keyboard.on('keydown-P', togglePause, this);
     this.input.keyboard.on('keydown-O', toggleObstacles, this);
     this.input.keyboard.on('keydown-D', toggleDebugPanel, this);
@@ -1015,8 +1024,8 @@ function create() {
 
     // DON'T start spawning immediately - wait for startGame() to be called
 
-    // Create player segments
-    createPlayerSegments.call(this);
+    // Create pie chart for color balance display
+    createPieChart.call(this);
 
     // Imbalance indicator
     imbalanceGraphics = this.add.graphics();
@@ -1025,12 +1034,14 @@ function create() {
     // Speed indicator removed - use debug panel (D key) for speed info
 
     // Distance/Score display (hidden initially - shown when game starts)
-    distanceText = this.add.text(780, 16, 'DISTANCE: 0', {
-        fontSize: '14px',
+    // Positioned to the left of pie chart (pie is at x=775, radius=14)
+    distanceText = this.add.text(755, 25, '0', {
+        fontSize: '18px',
         fill: '#ffffff',
-        fontFamily: 'monospace'
+        fontFamily: 'monospace',
+        fontStyle: 'bold'
     });
-    distanceText.setOrigin(1, 0);
+    distanceText.setOrigin(1, 0.5);  // Right-aligned
     distanceText.setDepth(100);
     distanceText.setVisible(false);
 
@@ -1077,164 +1088,125 @@ function create() {
     }
 }
 
-function createPlayerSegments() {
-    const segmentWidth = gameOptions.playerWidth;  // 32px
-    const segmentHeight = 3.5;
-    const segmentSpacing = 0.5;
-    const totalHeight = (segmentHeight + segmentSpacing) * maxSegments;
-
-    playerSegmentContainer = this.add.container(player.x, player.y - 70);
-    playerSegmentContainer.setDepth(15);
-
-    // Color hex map
-    const colorHexMap = {
-        red: colors.collectibleRed,
-        blue: colors.collectibleBlue,
-        green: colors.collectibleGreen,
-        yellow: colors.collectibleYellow
-    };
-
-    // Create 13 segment graphics (bottom to top, index 0 is bottom/oldest)
-    for (let i = 0; i < maxSegments; i++) {
-        const y = -(i * (segmentHeight + segmentSpacing));  // Stack upward from 0
-
-        const segment = this.add.graphics();
-        segment.segmentIndex = i;
-        segment.yPos = y;
-
-        // Draw empty segment initially
-        segment.fillStyle(0x333333, 0.3);
-        segment.fillRect(-segmentWidth / 2, y, segmentWidth, segmentHeight);
-
-        playerSegmentContainer.add(segment);
-        playerSegments.push(segment);
-    }
-
-    // Hide initially - will be shown when game starts
-    playerSegmentContainer.setVisible(false);
+function createPieChart() {
+    pieChartGraphics = this.add.graphics();
+    pieChartGraphics.setDepth(100);
+    pieChartGraphics.setVisible(false);  // Hidden until game starts
 }
 
-function updatePlayerSegments() {
-    const colorHexMap = {
-        red: colors.collectibleRed,
-        blue: colors.collectibleBlue,
-        green: colors.collectibleGreen,
-        yellow: colors.collectibleYellow
-    };
+function updatePieChart() {
+    pieChartGraphics.clear();
 
-    // Update each segment based on colorQueue
-    for (let i = 0; i < maxSegments; i++) {
-        const segment = playerSegments[i];
-        const segmentWidth = gameOptions.playerWidth;
-        const segmentHeight = 3.5;
-        const y = segment.yPos;
+    // Position on right side of screen (smaller size)
+    const centerX = 775;
+    const centerY = 25;
+    const radius = 14;
 
-        // Clear and redraw
-        segment.clear();
+    // Count colors in queue
+    const counts = { identity: 0, approval: 0, money: 0 };
+    colorQueue.forEach(color => counts[color]++);
+    const total = colorQueue.length;
 
-        if (i < colorQueue.length) {
-            // Filled segment - show color from queue
-            const color = colorQueue[i];
-            segment.fillStyle(colorHexMap[color], 1);
-            segment.fillRect(-segmentWidth / 2, y, segmentWidth, segmentHeight);
-        } else {
-            // Empty segment - show transparent gray
-            segment.fillStyle(0x333333, 0.3);
-            segment.fillRect(-segmentWidth / 2, y, segmentWidth, segmentHeight);
-        }
+    if (total === 0) {
+        // Empty pie - just draw outline
+        pieChartGraphics.lineStyle(2, 0x666666, 0.5);
+        pieChartGraphics.strokeCircle(centerX, centerY, radius);
+        return;
     }
 
-    // Follow player position
-    playerSegmentContainer.x = player.x;
-    playerSegmentContainer.y = player.y - 70;
+    const colorHexMap = {
+        identity: colors.collectibleIdentity,
+        approval: colors.collectibleApproval,
+        money: colors.collectibleMoney
+    };
+
+    // Draw pie slices - grouped by color, always in same order
+    let startAngle = -Math.PI / 2;  // Start from top (12 o'clock)
+    const colorOrder = ['identity', 'approval', 'money'];
+
+    colorOrder.forEach(colorType => {
+        const count = counts[colorType];
+        if (count > 0) {
+            const sliceAngle = (count / total) * Math.PI * 2;
+            const endAngle = startAngle + sliceAngle;
+
+            pieChartGraphics.fillStyle(colorHexMap[colorType], 1);
+            pieChartGraphics.beginPath();
+            pieChartGraphics.moveTo(centerX, centerY);
+            pieChartGraphics.arc(centerX, centerY, radius, startAngle, endAngle, false);
+            pieChartGraphics.closePath();
+            pieChartGraphics.fillPath();
+
+            startAngle = endAngle;
+        }
+    });
+
+    // Draw border
+    pieChartGraphics.lineStyle(1, 0xffffff, 0.6);
+    pieChartGraphics.strokeCircle(centerX, centerY, radius);
 }
 
 // ============ SPEED & BALANCE SYSTEM ============
 
 function calculateCharacterSpeed() {
+    const counts = { identity: 0, approval: 0, money: 0 };
+    colorQueue.forEach(color => counts[color]++);
+
     const total = colorQueue.length;
-    const speedBonus = total * gameOptions.speedBonusPerUnit;
-    const penalty = calculateImbalancePenalty();
 
-    // Character speed increases with time and collection bonus, reduced by imbalance penalty
-    let speed = gameOptions.characterBaseSpeed + speedBonus + timeSpeedBonus - penalty;
+    // Handle empty queue edge case
+    if (total === 0) {
+        characterSpeed = gameOptions.characterBaseSpeed + timeSpeedBonus;
+        isImbalanced = false;
+        currentPenalty = 0;
+        return;
+    }
 
-    // Cap at max speed (same as world speed cap)
-    speed = Math.min(gameOptions.maxSpeed, speed);
+    const percentages = Object.values(counts).map(c => (c / total) * 100);
+    const maxPercent = Math.max(...percentages);
+    const minPercent = Math.min(...percentages);
+    const difference = maxPercent - minPercent;
 
-    // Clamp to 0 minimum
-    characterSpeed = Math.max(0, speed);
+    // Neutral threshold = "off by 1" = ~16.67% diff (e.g., 5,4,3 with 12 items)
+    const neutralThreshold = 100 / 6;
 
-    // Store penalty globally for debug display
-    currentPenalty = penalty;
+    // Current base = characterBaseSpeed + timeSpeedBonus
+    const currentBase = gameOptions.characterBaseSpeed + timeSpeedBonus;
 
-    return penalty;
+    if (difference <= neutralThreshold) {
+        // BOOST ZONE: Additive bonus (fixed amount, doesn't scale with speed)
+        // +15 at perfect balance, linearly decreasing to 0 at threshold
+        const maxBoost = 15;
+        const boost = maxBoost * (1 - difference / neutralThreshold);
+        characterSpeed = currentBase + boost;
+        isImbalanced = false;
+        currentPenalty = 0;
+    } else {
+        // PENALTY ZONE: Multiplicative penalty (scales with current speed)
+        // Apply 80% of the percentage difference as penalty (dampened)
+        const dampening = 0.8;
+        const penaltyMultiplier = (difference / 100) * dampening;
+        characterSpeed = currentBase * (1 - penaltyMultiplier);
+        isImbalanced = true;
+        currentPenalty = difference * dampening;
+    }
+
+    // Cap at max speed
+    characterSpeed = Math.min(gameOptions.maxSpeed, characterSpeed);
+    characterSpeed = Math.max(0, characterSpeed);
 }
 
 function calculateWorldSpeed() {
-    const total = colorQueue.length;
-    const speedBonus = total * gameOptions.speedBonusPerUnit;
-
-    // World speed increases with time (and collection bonus if enabled)
-    let speed = gameOptions.baseSpeed + speedBonus + timeSpeedBonus;
-
-    // Cap at max speed
-    speed = Math.min(gameOptions.maxSpeed, speed);
-
-    // Update global worldSpeed (clamped to 0 for physics/visuals)
-    worldSpeed = Math.max(0, speed);
-}
-
-function calculateImbalancePenalty() {
-    // No penalty if queue is empty
-    if (colorQueue.length === 0) {
-        isImbalanced = false;
-        return 0;
-    }
-
-    // Count each color's occurrences in the queue
-    const counts = { red: 0, blue: 0, green: 0, yellow: 0 };
-    colorQueue.forEach(color => counts[color]++);
-
-    // Count how many unique colors we have
-    const uniqueColors = Object.values(counts).filter(count => count > 0).length;
-
-    // No penalty if we have less than 2 different colors
-    // (can't be "imbalanced" with only one color type)
-    if (uniqueColors < 2) {
-        isImbalanced = false;
-        return 0;
-    }
-
-    // Calculate percentages only for colors that exist (ignore 0% colors)
-    const total = colorQueue.length;
-    const collectedPercentages = [];
-
-    for (const color in counts) {
-        if (counts[color] > 0) {
-            collectedPercentages.push((counts[color] / total) * 100);
-        }
-    }
-
-    // Find max and min percentages among collected colors only
-    const maxPercent = Math.max(...collectedPercentages);
-    const minPercent = Math.min(...collectedPercentages);
-    const difference = maxPercent - minPercent;
-
-    // Calculate penalty if imbalanced
-    if (difference > gameOptions.maxPercentageDifference) {
-        isImbalanced = true;
-        return (difference - gameOptions.maxPercentageDifference) * gameOptions.imbalancePenaltyMultiplier;
-    }
-
-    isImbalanced = false;
-    return 0;
+    // World speed is simply base + time bonus (unaffected by balance modifier)
+    worldSpeed = gameOptions.baseSpeed + timeSpeedBonus;
+    worldSpeed = Math.min(gameOptions.maxSpeed, worldSpeed);
 }
 
 function updateImbalanceIndicator() {
     imbalanceGraphics.clear();
 
-    if (isImbalanced) {
+    // Red border and tint trigger when ghost is active (player in danger zone)
+    if (ghostActive) {
         imbalanceGraphics.lineStyle(6, colors.imbalanceWarning, 0.6);
         imbalanceGraphics.strokeRect(3, 3, 794, 444);
         player.setTint(0xffaaaa);
@@ -1315,7 +1287,7 @@ function spawnObstacle() {
 
 function spawnColorCollectible() {
     const colorType = selectColorToSpawn();
-    const textureKey = 'collectible_' + colorType + '_1';
+    const textureKey = 'coin_' + colorType;  // Use SVG coin textures
 
     let collectible;
     const pooled = colorCollectiblePool.getChildren().find(c => c.colorType === colorType);
@@ -1323,6 +1295,7 @@ function spawnColorCollectible() {
     if (pooled) {
         collectible = pooled;
         resetPooledObject(collectible);  // Reset all properties before reuse
+        collectible.setTexture(textureKey);  // Update texture for pooled object
         collectible.setActive(true);
         collectible.setVisible(true);
         colorCollectiblePool.remove(collectible);
@@ -1344,14 +1317,13 @@ function spawnColorCollectible() {
     const maxY = gameOptions.groundY - 10;   // Very low point (below duck height)
     collectible.y = Phaser.Math.Between(minY, maxY);
     collectible.setVelocityX(-worldSpeed);
-    collectible.animFrame = 0;
-    collectible.animTimer = 0;
+    collectible.rotationPhase = Math.random() * Math.PI * 2;  // Random start phase for rotation
 }
 
 function selectColorToSpawn() {
     // 100% weighted toward most collected (no random - very hard to balance!)
     // Calculate counts from queue for weighted selection
-    const counts = { red: 0, blue: 0, green: 0, yellow: 0 };
+    const counts = { identity: 0, approval: 0, money: 0 };
     colorQueue.forEach(color => counts[color]++);
 
     // Calculate total weight based on actual counts (more collected = much higher weight)
@@ -1365,7 +1337,7 @@ function selectColorToSpawn() {
         random -= weight;
         if (random <= 0) return color;
     }
-    return 'red';
+    return 'identity';
 }
 
 // ============ COLLECTION ============
@@ -1392,7 +1364,7 @@ function collectColorItem(playerSprite, collectible) {
         colorQueue.push(colorType);  // Add to end (newest/top)
     }
 
-    updatePlayerSegments();
+    updatePieChart();
     calculateCharacterSpeed();
     calculateWorldSpeed();
 
@@ -1412,6 +1384,7 @@ function collectColorItem(playerSprite, collectible) {
         onComplete: () => {
             collectible.setScale(1);
             collectible.setAlpha(1);
+            collectible.rotationPhase = 0;  // Reset rotation for reuse
             collectible.setActive(false);
             collectible.setVisible(false);
             collectible.setVelocityX(0);
@@ -1558,14 +1531,182 @@ function jump() {
     }
 }
 
+// ============ GHOST HELPER SYSTEM ============
+
+function getLeastColor() {
+    const counts = { identity: 0, approval: 0, money: 0 };
+    colorQueue.forEach(color => counts[color]++);
+
+    let minColor = 'identity';
+    let minCount = counts.identity;
+
+    for (const color in counts) {
+        if (counts[color] < minCount) {
+            minCount = counts[color];
+            minColor = color;
+        }
+    }
+    return minColor;
+}
+
+function spawnGhost() {
+    const leastColor = getLeastColor();
+    const textureKey = 'ghost_' + leastColor + '_1';
+
+    // Ghost starts off-screen left
+    ghostSprite = this.physics.add.sprite(-50, gameOptions.groundY, textureKey);
+    ghostSprite.setOrigin(0.5, 1);  // Anchor at feet like player
+    ghostSprite.setDepth(9);  // Behind player (10) but above obstacles (8)
+    ghostSprite.setScale(0.5);  // Match character size
+    ghostSprite.setAlpha(0.5);  // 50% opacity
+    ghostSprite.body.allowGravity = false;
+    ghostSprite.ghostColor = leastColor;
+    ghostSprite.animFrame = 0;
+    ghostSprite.animTimer = 0;
+
+    // Target position: just in front of player (30px ahead)
+    ghostSprite.targetX = player.x + 30;
+
+    // Start in approaching phase
+    ghostPhase = GHOST_PHASE.APPROACHING;
+    ghostSprite.setVelocityX(GHOST_APPROACH_SPEED);
+    ghostActive = true;
+
+    // Create particle trail
+    const colorHex = {
+        identity: 0xcc0000,
+        approval: 0x2462ff,
+        money: 0xdfdfdf
+    };
+
+    ghostParticles = this.add.particles(0, 0, 'particle_skin', {
+        follow: ghostSprite,
+        followOffset: { x: -20, y: 0 },
+        speed: { min: 20, max: 50 },
+        scale: { start: 0.8, end: 0 },
+        alpha: { start: 0.5, end: 0 },
+        lifespan: 400,
+        frequency: 50,
+        tint: colorHex[leastColor]
+    });
+    ghostParticles.setDepth(8);
+
+    // Show "You're falling behind.." text with animation
+    const warningText = this.add.text(400, 150, "You're falling behind..", {
+        fontSize: '18px',
+        fill: '#ffffff',
+        fontFamily: 'monospace',
+        fontStyle: 'bold',
+        stroke: '#000000',
+        strokeThickness: 3
+    });
+    warningText.setOrigin(0.5);
+    warningText.setDepth(100);
+    warningText.setAlpha(0);
+
+    // Fade in, hold, then fade out
+    this.tweens.add({
+        targets: warningText,
+        alpha: 1,
+        y: 130,
+        duration: 300,
+        ease: 'Power2',
+        onComplete: () => {
+            this.tweens.add({
+                targets: warningText,
+                alpha: 0,
+                y: 110,
+                delay: 1000,
+                duration: 500,
+                onComplete: () => warningText.destroy()
+            });
+        }
+    });
+}
+
+function updateGhost(delta) {
+    if (!ghostSprite || !ghostActive) return;
+
+    // Animate ghost (2-frame loop)
+    ghostSprite.animTimer += delta;
+    if (ghostSprite.animTimer > 100) {
+        ghostSprite.animTimer = 0;
+        ghostSprite.animFrame = (ghostSprite.animFrame + 1) % 2;
+        ghostSprite.setTexture('ghost_' + ghostSprite.ghostColor + '_' + (ghostSprite.animFrame + 1));
+    }
+
+    // Phase-based behavior
+    switch (ghostPhase) {
+        case GHOST_PHASE.APPROACHING:
+            // Ghost is running fast from left toward player
+            if (ghostSprite.x >= player.x + 30) {
+                // Reached target position - switch to running with player
+                ghostPhase = GHOST_PHASE.RUNNING_WITH;
+                ghostSprite.setVelocityX(0);  // Will be updated each frame
+
+                // Play laugh track
+                if (ghostLaugh) {
+                    ghostLaugh.play();
+                    // When laugh ends, switch to running away
+                    ghostLaugh.once('complete', () => {
+                        if (ghostActive && ghostPhase === GHOST_PHASE.RUNNING_WITH) {
+                            ghostPhase = GHOST_PHASE.RUNNING_AWAY;
+                            ghostSprite.setVelocityX(GHOST_RUN_AWAY_SPEED);
+                            // Play run-away sound
+                            if (ghostRunSound) {
+                                ghostRunSound.play();
+                            }
+                        }
+                    });
+                }
+            }
+            break;
+
+        case GHOST_PHASE.RUNNING_WITH:
+            // Ghost matches character speed, stays just ahead of player
+            // Move ghost with same net movement as player
+            const characterMovement = (characterSpeed * delta) / 1000;
+            const worldMovement = (worldSpeed * delta) / 1000;
+            ghostSprite.x += characterMovement - worldMovement;
+            // Keep ghost slightly ahead of player
+            if (ghostSprite.x < player.x + 20) {
+                ghostSprite.x = player.x + 20;
+            }
+            break;
+
+        case GHOST_PHASE.RUNNING_AWAY:
+            // Ghost runs off to the right
+            // Despawn when off-screen right
+            if (ghostSprite.x > 850) {
+                cleanupGhost();
+            }
+            break;
+    }
+}
+
+function cleanupGhost() {
+    if (ghostSprite) {
+        ghostSprite.destroy();
+        ghostSprite = null;
+    }
+    if (ghostParticles) {
+        ghostParticles.destroy();
+        ghostParticles = null;
+    }
+    ghostActive = false;
+    ghostPhase = null;
+}
+
 function startDuck() {
     const onGround = player.body.blocked.down || player.body.touching.down;
     if (onGround && !isJumping) {
         isDucking = true;
         player.setTexture('player_duck');
-        // Shrink hitbox to half height, offset to bottom of sprite
+        // Shrink hitbox to half height, keep bottom aligned with normal stance
+        // Normal: size 94, offset -20, bottom at -20+94=74
+        // Duck: size 47, offset should give bottom at 74: offset+47=74, offset=27
         player.body.setSize(94, 47);
-        player.body.setOffset(0, 47);
+        player.body.setOffset(0, 27);
     }
 }
 
@@ -1573,9 +1714,9 @@ function stopDuck() {
     if (isDucking) {
         isDucking = false;
         player.setTexture('player_run1');
-        // Restore full hitbox
+        // Restore full hitbox with original offset
         player.body.setSize(94, 94);
-        player.body.setOffset(0, 0);
+        player.body.setOffset(0, -20);
     }
 }
 
@@ -1650,10 +1791,11 @@ function restartGame() {
     this.input.keyboard.off('keydown-SPACE', jump, this);
     this.input.keyboard.off('keydown-UP', jump, this);
     this.input.keyboard.off('keydown-W', jump, this);
-    this.input.keyboard.off('keydown-DOWN', startDuck, this);
-    this.input.keyboard.off('keydown-S', startDuck, this);
-    this.input.keyboard.off('keyup-DOWN', stopDuck, this);
-    this.input.keyboard.off('keyup-S', stopDuck, this);
+    // Duck disabled for now
+    // this.input.keyboard.off('keydown-DOWN', startDuck, this);
+    // this.input.keyboard.off('keydown-S', startDuck, this);
+    // this.input.keyboard.off('keyup-DOWN', stopDuck, this);
+    // this.input.keyboard.off('keyup-S', stopDuck, this);
     this.input.keyboard.off('keydown-P', togglePause, this);
     this.input.keyboard.off('keydown-O', toggleObstacles, this);
     this.input.keyboard.off('keydown-D', toggleDebugPanel, this);
@@ -1680,6 +1822,26 @@ function restartGame() {
 
     // Reset game state
     slowSpeedTimer = 0;
+
+    // Reset ghost state
+    ghostActive = false;
+    ghostTriggered = false;
+    ghostPhase = null;
+    if (ghostSprite) {
+        ghostSprite.destroy();
+        ghostSprite = null;
+    }
+    if (ghostParticles) {
+        ghostParticles.destroy();
+        ghostParticles = null;
+    }
+    // Stop ghost sounds if playing
+    if (ghostLaugh && ghostLaugh.isPlaying) {
+        ghostLaugh.stop();
+    }
+    if (ghostRunSound && ghostRunSound.isPlaying) {
+        ghostRunSound.stop();
+    }
 
     // Restart scene (this will call create() again which shows the start screen)
     this.scene.restart();
@@ -1730,6 +1892,11 @@ function update(time, delta) {
         bgMusic.setRate(clampedRate);
     }
 
+    // Cap character speed at edge - can't outrun world speed at 80%
+    if (player.x >= gameOptions.edgeCapX) {
+        characterSpeed = Math.min(characterSpeed, worldSpeed);
+    }
+
     // Move player forward based on character speed
     const characterMovement = (characterSpeed * delta) / 1000;
     const worldMovement = (worldSpeed * delta) / 1000;
@@ -1737,14 +1904,24 @@ function update(time, delta) {
     // Net movement: character moves forward, world moves backward (relative to player)
     player.x += characterMovement - worldMovement;
 
-    // Check if player has reached the sync threshold (75% of screen)
-    if (player.x >= gameOptions.syncThresholdX) {
-        // Just reset position, don't update base speeds (prevents exponential growth bug)
-        player.x = gameOptions.playerStartX;
-    }
-
     // Clamp player position to screen bounds
     player.x = Phaser.Math.Clamp(player.x, 0, config.width);
+
+    // Ghost trigger check - spawn helper ghost when player is in danger
+    if (player.x <= GHOST_TRIGGER_X && !ghostTriggered && colorQueue.length > 0) {
+        ghostTriggered = true;
+        spawnGhost.call(this);
+    }
+
+    // Reset ghost trigger when player recovers past midpoint
+    if (player.x > gameOptions.playerStartX) {
+        ghostTriggered = false;
+    }
+
+    // Update ghost if active
+    if (ghostActive) {
+        updateGhost.call(this, delta);
+    }
 
     // Game Over if player is pushed off the left edge or falls
     if (player.x <= 0 || player.y > config.height + 50) {
@@ -1787,7 +1964,7 @@ function update(time, delta) {
 
     // Update distance score based on character speed
     distanceScore += (characterSpeed * delta) / 1000;
-    distanceText.setText('DISTANCE: ' + Math.floor(distanceScore));
+    distanceText.setText(Math.floor(distanceScore).toString());
 
     // Run animation (2-frame loop with PNG sprites)
     if (onGround && !isDucking && !isJumping) {
@@ -1799,15 +1976,13 @@ function update(time, delta) {
         }
     }
 
-    // Animate collectibles
+    // Animate collectibles with scaleX rotation
     colorCollectibleGroup.getChildren().forEach(collectible => {
         if (collectible.active) {
-            collectible.animTimer = (collectible.animTimer || 0) + delta;
-            if (collectible.animTimer > 120) {
-                collectible.animTimer = 0;
-                collectible.animFrame = ((collectible.animFrame || 0) + 1) % 4;
-                collectible.setTexture('collectible_' + collectible.colorType + '_' + (collectible.animFrame + 1));
-            }
+            // scaleX flip animation (full rotation every ~500ms)
+            collectible.rotationPhase = (collectible.rotationPhase || 0) + delta * 0.008;
+            collectible.scaleX = Math.cos(collectible.rotationPhase);
+
             // Update velocity to match current speed
             collectible.setVelocityX(-worldSpeed);
         }
@@ -1845,7 +2020,7 @@ function update(time, delta) {
     });
 
     // Update UI
-    updatePlayerSegments();
+    updatePieChart();
     updateImbalanceIndicator();
 
     // Update debug panel if visible
