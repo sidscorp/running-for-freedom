@@ -430,7 +430,7 @@ function createCoinAnimations() {
         this.anims.create({
             key: 'coin_' + type + '_spin',
             frames: this.anims.generateFrameNumbers('coin_' + type, { start: 0, end: 7 }),
-            frameRate: 12,
+            frameRate: 3,
             repeat: -1
         });
     });
@@ -648,8 +648,20 @@ function createStartScreen() {
     // Simple dark background box
     const bg = this.add.graphics();
     bg.fillStyle(0x000000, 0.9);
-    bg.fillRect(-180, -60, 360, 120);
+    bg.fillRect(-180, -70, 360, 130);
     startContainer.add(bg);
+
+    // Three coins rotating above the title
+    const coinTypes = ['identity', 'approval', 'money'];
+    const coinSpacing = 40;
+    coinTypes.forEach((type, index) => {
+        const coinX = (index - 1) * coinSpacing; // -40, 0, 40
+        const coin = this.add.sprite(coinX, -70, 'coin_' + type);
+        coin.setOrigin(0.5);
+        coin.setScale(0.5);
+        coin.play('coin_' + type + '_spin');
+        startContainer.add(coin);
+    });
 
     // Game title in yellow
     const title = this.add.text(0, -30, 'RUNNING FOR FREEDOM', {
@@ -691,8 +703,20 @@ function createGameOverScreen() {
     // Simple dark background box
     const bg = this.add.graphics();
     bg.fillStyle(0x000000, 0.9);
-    bg.fillRect(-180, -80, 360, 160);
+    bg.fillRect(-180, -95, 360, 175);
     gameOverContainer.add(bg);
+
+    // Three coins rotating above the title
+    const coinTypes = ['identity', 'approval', 'money'];
+    const coinSpacing = 40;
+    coinTypes.forEach((type, index) => {
+        const coinX = (index - 1) * coinSpacing; // -40, 0, 40
+        const coin = this.add.sprite(coinX, -95, 'coin_' + type);
+        coin.setOrigin(0.5);
+        coin.setScale(0.5);
+        coin.play('coin_' + type + '_spin');
+        gameOverContainer.add(coin);
+    });
 
     // Game Over title in yellow
     const title = this.add.text(0, -50, 'GAME OVER', {
